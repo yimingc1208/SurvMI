@@ -1,0 +1,6 @@
+"0","knitr::opts_chunk$set(echo = TRUE)"
+"0","library(survival)"
+"0","library(zoo)"
+"0","library(SurvMI)"
+"0","options(mc.cores = parallel::detectCores())"
+"0","Sys.setenv(LOCAL_CPPFLAGS = '-march=native') # might throw an error on some processors"

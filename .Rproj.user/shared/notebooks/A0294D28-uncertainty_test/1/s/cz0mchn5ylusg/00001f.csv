@@ -1,0 +1,2 @@
+"0","set.seed(128)"
+"0","KM_res<-KMMI(data_list=data_intrim,nMI=NULL,covariates=c(""trt""),plot=TRUE,data_orig=NULL)"

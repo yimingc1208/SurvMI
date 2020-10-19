@@ -1,0 +1,3 @@
+"0","df_y<-data_sim2(data_list=data_intrim,covariates=c(""trt""),percentage=1)"
+"0","df_y<-df_y[ order(df_y$var_id, df_y$time), ]"
+"0","head(df_y,n=20, row.names = F)"

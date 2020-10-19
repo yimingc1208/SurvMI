@@ -1,0 +1,8 @@
+"0","set.seed(128)"
+"0","##data_orig is the data set with certain event"
+"0","data_orig<-df_y[df_y$prob==0|df_y$prob==1,]"
+"0","data_orig<-data_orig[!duplicated(data_orig$var_id),]"
+"0","data_orig$cens<-data_orig$prob"
+"0","data_intrim2<-uc_data_transform(data=df_y, var_list=c(""var_id"",""trt""),"
+"0","                               var_list_new=NULL,time=""time"", prob=""prob"")"
+"0","KM_res<-KMMI(data_list=data_intrim2,nMI=100,covariates=c(""trt""),plot=TRUE,data_orig=data_orig)"

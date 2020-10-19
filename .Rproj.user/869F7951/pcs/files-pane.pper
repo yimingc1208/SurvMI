@@ -1,0 +1,9 @@
+{
+    "path" : "~/adjudication/SurvMI/man",
+    "sortOrder" : [
+        {
+            "ascending" : true,
+            "columnIndex" : 2
+        }
+    ]
+}

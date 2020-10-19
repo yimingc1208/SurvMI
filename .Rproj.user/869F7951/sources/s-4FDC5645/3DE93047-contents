@@ -1,0 +1,189 @@
+---
+title: "SurvMI R package demonstration"
+author: "Yiming Chen"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+<style type="text/css">
+slides > slide:not(.nobackground):after {
+  content: '';
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(survival)
+library(zoo)
+library(SurvMI)
+options(mc.cores = parallel::detectCores())
+Sys.setenv(LOCAL_CPPFLAGS = '-march=native') # might throw an error on some processors
+```
+
+The SurvMI package introduces some generalizaed methods which dealing with uncertain endpoints in clinical trials. Events uncertainty is commonly observed when the endpoint is composite or cause specific. To ensure study interity, an adjudication committee become a necessiarity in most studies. However, the benefits of event adjudication has been debated for few decades. We hereby propose alternatives to handle event uncertainty. Analyses discussed here include the Kaplan-Meier estimator, Log-Rank test and Cox-PH model, we limited our attention to weighted method and Multiple Imputation (MI). Dependencies include survival, zoo packages, enviroment requirement should be described in details before publication.\
+We started with the data format required by this package. \
+First, there is no real example available so far. Hereby we created a simulation function which can generate survival data with uncertainty. In the simulation, we generated time-to-event data following exponential distribution, subjects were randomized into two treatment groups with ratio 1:1 (true hr = 0.8), event probability at each potential time points was generated randomly by an uniform distribution on [0,1]. Accrual time was set to 1 year and follow-up time was set to 3 years. Users can change the hazard ratio and event rate in the control group. We give a comparable simple simulation program for demonstration purpose, maybe user can change other settings in future release. The outcome of the program is a dataset in long format and we will use the simulated data in following sections.\
+We would like users to input the real data in a long format as the one we simulated. To make it intuitively, users only need to input one row per potential event and specify the event time and corresponding event probability (0<=p<=1). There must be id, time and prob variables at a minimal, no event indicator variable required as we are dealing with event uncertainty. Note, there must be a censoring record for each subject, prob of event on censoring date must be zero. Duplicated event date for individual is not allowed, as subjects can only have one event at each timepoint. The censoring date may require a little amount of extra coding, e.g. a subject experience the fatal event and the death cause may be component of the endpoint (event) or not (censoring). The weighted method won't accept two different weights on the same day, so users have to add a small amount (e.g. 0.1) to the death date and make an artificial censoring date. As a result, there are two records for this death event, one is with positive event probability and the other is censoring record with event probability equals zero and a slightly prolonged event date. If there is a certain event before the censoring date, no weights would be put on the censoring date and any other potential event dates. Besides id variable, other baseline (time-independent) covariates can be added, we added a continuous variable "age" to the simulated data later. An important note for inputting any categoriacal variable with k (k > 2) levels is that, a corresponding factor variable need to be created beforehand. Following data transform should be performed with respect to the factor variable if we would like to include the categorical variable in the model. The simulated data or user input data should look like:
+```{r, message=FALSE}
+#input data
+set.seed(128)
+df_x<-data_sim(n=500,0.8,haz_c=1/365)
+head(df_x)
+
+##a test case as trtment has more than two levels
+#df_x[(df_x$id_long>=900),]$trt_long=2
+#df_x$f.trt<-as.factor(df_x$trt_long)
+
+```
+Supplied with above long formatted data (either simulated or input by users), we then use a transformation function to create data in a "wide" format. In order to conduct the weighted estimation following the Snapinn and Cook's method, weights have to be calculated for each subject at each potential timepoint. Individual weights sum to one. This transformation function calcuates weights, and reshape event probabilities and potential event time into a list. This step is required before calling any other functions from the package. Other functions in this package only take this data list input. However, if the categorical variable has more than two levels, it's necessary to factorize it before the transformation, and the factor variable should be included in the var_list option. This is necessary for the Cox model. User may already supply a dataset with categorical variables in desired formats, here we added an extra step as we simulated the treatment regimen in a numeric manner. \
+Based on number of unique columns and data size, transformation may take seconds to run. We displayed the list for the first subject, in the long format, there are two potential events for subject 1 and one censoring record, as a result, the data list for first subject has a length of three.
+```{r, message=FALSE}
+#a test case with a continuous variable added, all following functions have been tested with this extra age variable
+df_x$age<-rnorm(nrow(df_x),mean=40, sd=10)
+for (i in 1:(nrow(df_x)-1)){
+  if (df_x$id_long[i]==df_x$id_long[i+1]){
+   df_x$age[i+1]=df_x$age[i]
+  }
+}
+df_x$f.trt<-as.factor(df_x$trt_long)
+
+data_intrim<-uc_data_transform(data=df_x,
+                               var_list=c("id_long","f.trt"),
+                               #var_list=c("id_long","trt_long","age"),
+                               #var_list=c("id_long","f.trt","age"),
+                               var_list_new=c("var_id","trt"),
+                               #var_list_new=c("id","trt","age"),
+                               time="time_long",
+                               prob="prob_long")
+data_intrim$time[[1]]
+data_intrim$prob[[1]]
+data_intrim$weights[[1]]
+data_intrim$s[[1]]
+```
+In the input data, there is no event indicator as we only have the event probability at all potential timepoints. In order to make the inference of interested efffect, we can either use the MI method to impute event indicator base on the event probability or apply weights to all potential events. We first discuss the Cox PH model with event uncertainty. Cook believes that the weighted partial likelihood can only be used when extra assumption on event history is posed, this needs to be further investigated. There is another estimating function proposed in Cook (2004). We are able to calculate the correpsonding Wald test p-values (based on Cook's variance) for the Cox PH model. Bootstrap method was also employed to calculate the estimation variance. The BS variance matches well with the Cook's variance (sligtly smaller).\
+To use this function, we only need to specify the transformed data list and the covariates we would like on the RHS of the Cox model. Note, the variable name input here should be the one used in the data list, which may not be the same as original long format data. Initial value vector is optional. Its length has to be consistent with the length of parameter to be estimated (no intercept, but for k level categorical variable, k-1 parameteres needed) if specify.\
+```{r, message=FALSE}
+fit1<-Coxwt(data_list=data_intrim,covariates=c("trt"),init=c(1),BS=FALSE)
+Coxwt.summ(fit1)
+
+data_intrim2<-uc_data_transform(data=df_x,
+                               var_list=c("id_long","f.trt","age"),
+                               var_list_new=c("var_id","trt","age"),
+                               time="time_long",
+                               prob="prob_long")
+fit2<-Coxwt(data_list=data_intrim2,covariates=c("trt","age"),init=c(1,1),BS=FALSE)
+Coxwt.summ(fit2)
+
+fit3<-Coxwt(data_list=data_intrim,covariates=c("trt"),init=c(1),BS=TRUE, nBS = 100)
+Coxwt.summ(fit3)
+```
+We can use MI to estimate the Cox model as well. As previously noted, for categorical variables with more than two levels, factor variables need to be created and included in the covariates option. At each timepoint, event will be imputed with given event probability. Time to first imputed event is the response variable, in other words, information after first imputed event would be discarded. Within variance is very close to the variance estimation from the weighted method. However, the between imputation variance drive overall variance up, MI method tends to yield a larger p-value. Large between imputation varaince serves as evidence of considerable amount of event uncertainty in this study, note we generate event probability by random uniform distribution in simulation so we expect a large between imputation variance. Hence, MI method provides more insights of data uncertainty comparing to the weighted method. The point estimators of these two methods match well. If we would like to do the Andersen-Gill Cox model, we can simply add the "id" option as in the Cox model, other options from the coxph model should carry over. The number of expected events is the average of events count from nMI imputed datasets. Depends on the imputation number and sample size, this function may take several minutes to run. Currently, with nMI = 1000 and sample size = 1000, program takes less than one minute.
+```{r, message=FALSE}
+set.seed(128)
+fit<-CoxMI(data_list=data_intrim,nMI=1000,covariates=c("trt"))
+CoxMI.summ(fit)
+
+fit1<-CoxMI(data_list=data_intrim2,nMI=1000,covariates=c("trt","age"))
+CoxMI.summ(fit1)
+
+fit2<-CoxMI(data_list=data_intrim,nMI=1000,covariates=c("trt"),id=c("var_id"),method = "breslow")
+CoxMI.summ(fit2)
+```
+Furthermore, this data format allows weighted KM estimation and weighted Log-rank test. MI method provides consistent estimator for subjects at risk or subjects with event. Then by usual product limit estimator and Grrenwood forula, we could estimate generalize the KM to event uncertainty case. This idea somehow matches with weighted KM and Log-rank proposed by Cook (2000). The KMMI and LRMI functions can handle event uncertainty either by the weighted method or MI method. If we do not specify the MI number, then the weighted estimator will be output instead. Users can choose to conduct analyses based on MI or weighted method. Results from these methods are comparable. MI estimator has larger variance because of the between imputation variance.  
+```{r, message=FALSE}
+set.seed(128)
+KM_res<-KMMI(data_list=data_intrim,nMI=NULL,covariates=c("trt"),plot=TRUE,data_orig=NULL)
+
+KM_res<-KMMI(data_list=data_intrim,nMI=1000,covariates=c("trt"),plot=TRUE,data_orig=NULL)
+
+
+KM_res<-KMMI(data_list=data_intrim,nMI=1000,covariates=NULL,plot=TRUE,data_orig=NULL)
+
+fit<-LRMI(data_list=data_intrim,nMI=NULL,covariates=c("trt"))
+LRMI.summ(fit)
+
+fit<-LRMI(data_list=data_intrim,nMI=1000,covariates=c("trt"))
+LRMI.summ(fit)
+```
+A second set of simulated data is the one with more potential events. The logic is as in real clinical trials, adjudication is always the gold standard. The adjudicated events are 100% sure to be real events, but some events failed to be eligble as endpoints because of the rigorous adjudication rules. The resultant data looks like a combination of "certain" events (with event probability = 0 or 1) and "uncertain" events. Uncertain events stand for those failed to qualify as endpoints, but they are believed as potential events if more information were provided. We would like to use this set of data to demonstrate the benefits of including more potential events into analysis.\
+We can first create a "true" dataset base on the long formatted data we created previously. The event with largest weight is kept as "truth" for individuals. If the largest event is on censoring and there is no potential events at all, then the subject is "really" censored. But for those subjects censored with any potential events before the censoring date, they actually have certain probability to have the events. We can specify the proportion of this part of subjects we believe have the potential events. We further keep the event with the largest event probability as the potential event for the MI method. The resultant dataset was presented below. Note for events with certainty, their prob is either 0 or 1, for those potential events (orignially adjudicated as censored), they have one or more potential event records with event prob > 0 and one cenosring record with event prob = 0. As defined eariler, all subjects must have a censoring record and no ties allowed at individual level. Users should be able to directly conduct analyses by calling functions if they provide data lin required format. Note, this dataset is just a special case of previous simulated data.\
+Our method may look artifical because in order to elimnate influence of the starting random seed, program has to be executed in an iteration manner. 
+```{r, message=FALSE}
+df_y<-data_sim2(data_list=data_intrim,covariates=c("trt"),percentage=1)
+df_y<-df_y[ order(df_y$var_id, df_y$time), ]
+head(df_y,n=20, row.names = F)
+tail(df_y,n=20, row.names = F)
+```
+Besides outputting KM estimator at each timepoint, we output the KM plots comparing original KM curves (those without potential events added) to KM curves after adding those potential events. The solid lines are original KM estimators while dashed lines are KM MI estimated curves. The output list contains multiple datasets with KM estimations depends on input options. The observation is that after adding more potential events, KM estimator is smaller than previous results with certain events only as there are more events contribute to the analysis.
+```{r, message=FALSE}
+set.seed(128)
+##data_orig is the data set with certain event
+data_orig<-df_y[df_y$prob==0|df_y$prob==1,]
+data_orig<-data_orig[!duplicated(data_orig$var_id),]
+data_orig$cens<-data_orig$prob
+
+data_intrim2<-uc_data_transform(data=df_y, var_list=c("var_id","trt"),
+                               var_list_new=NULL,time="time", prob="prob")
+
+KM_res<-KMMI(data_list=data_intrim2,nMI=100,covariates=c("trt"),plot=TRUE,data_orig=data_orig)
+
+```
+Similarly, we can use the same CoxMI function to compare the MI estimation with the Cox model with certain events only. Because we use simulated data in this demonstration, the MI method has to be run in an iterated manner with a new potential dataset generated during each iteration. However, the orig data remains the same since they are records with largest weights. 
+Note, benefits of this method maybe more obvious when there are considerable amount of suspected uncertain events. Since we simulated the more events case with the constant hazard ratio assumption, the MI method returns a consistant point estimation and a smaller p-value.
+The benefit is not that obvious becasue in our simulation we only imputed event for those with potential events. As we can see, there are not much events be added to the analysis. However, we believe this is the most natural way to mimic the real application.
+```{r, message=FALSE}
+##we first analysis the original data without any potential events added
+coxph(Surv(time,cens)~trt,data=data_orig)
+#table(data_orig$trt,data_orig$cens)
+
+##because we are using simulated data, the MI need to be done for each simulated data and pull results together to make the inference
+set.seed(123)
+niter<-300
+nMI=20
+  betamat=matrix(0,nrow=(nMI*niter),ncol=1)
+  vararray=array(0,dim=c(nMI*niter,1,1))
+  en=rep(0,niter)
+  #temp_n<-matrix(0,nrow=(niter),ncol=2)
+  for (z in (1:niter)){
+    df_y<-data_sim2(data_list=data_intrim,covariates=c("trt"),percentage=0.5)
+    #sum(df_y[df_y$trt==0,]$prob)
+    data_intrim2<-uc_data_transform(data=df_y, var_list=c("var_id","trt"),
+                                    var_list_new=NULL,time="time", prob="prob")
+
+
+    #temp_n[z,1]<-nrow(df_y[!is.na(df_y$prob)&df_y$prob<1&df_y$prob>0&df_y$trt==0,])
+    #temp_n[z,2]<-nrow(df_y[!is.na(df_y$prob)&df_y$prob<1&df_y$prob>0&df_y$trt==1,])
+  
+fit<-CoxMI(data_list=data_intrim2,nMI=20,covariates=c("trt"))
+
+  betamat[((z-1)*nMI+1):(z*nMI),]=fit$est_matrix
+  vararray[((z-1)*nMI+1):(z*nMI),,]=fit$Var_mat
+  en[z]=fit$en
+  }
+mean(en)
+mean<-mean(betamat)
+within<-sqrt(mean(vararray))
+between<-sqrt(var(betamat))
+sd<-sqrt(var(betamat)*(1+1/(nMI*niter))+mean(vararray))
+p=as.numeric(2*(1-pnorm(abs(mean/sd))))
+print(c(mean,exp(mean),sd,p))
+
+##Weighted Cox model follows - only one simulated data used for demonstration purpose
+fit<-Coxwt(data_list=data_intrim2,covariates=c("trt"),init=c(1),BS=FALSE)
+Coxwt.summ(fit)
+```
+Following the same logic, we can conduct Log-rank test comparing group difference. We compare the results between Log-rank test based on the orig data and the dataset with potential events added. For demonstration purpose we only conduct LR to one simulated dataset. In order to elimnate the effect of starting random seed, an iteration similar to Cox MI above need to be coded. As expected, with more events added we observe smaller p-values of the Log-rank test.
+```{r, message=FALSE}
+survdiff(Surv(time,prob)~trt,data=data_orig)
+
+fit<-LRMI(data_list=data_intrim2,nMI=100,covariates=c("trt"))
+LRMI.summ(fit)
+
+fit<-LRMI(data_list=data_intrim2,nMI=NULL,covariates=c("trt"))
+LRMI.summ(fit)
+
+```
+
+

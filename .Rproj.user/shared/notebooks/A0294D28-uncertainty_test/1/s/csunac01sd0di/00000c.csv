@@ -1,0 +1,3 @@
+"0","##a test case as trtment has more than two levels"
+"0","#df_x[(df_x$id_long>=900),]$trt_long=2"
+"0","#df_x$f.trt<-as.factor(df_x$trt_long)"
